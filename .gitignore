@@ -1,0 +1,12 @@
+target/
+*.iws
+*.iml
+*.ipr
+.idea
+.idea_modules
+.project
+.metadata
+.cache
+.classpath
+.settings
+
