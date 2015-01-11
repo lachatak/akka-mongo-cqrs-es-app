@@ -28,25 +28,30 @@ class AccountingSystem extends PersistentActor with ActorLogging with StreamEvtP
     case SnapshotOffer(_, snapshot: AccountState) => state = snapshot
   }
 
-  override val handleEvt: PartialFunction[DomainEvt, DomainEvt] = {
+  override def handleEvt: PartialFunction[DomainEvt, DomainEvt] = {
     case evt: AccountCreatedEvt =>
       updateInternalState(Account(evt.accountNumber, evt.accountHolder, 0, List(StateHistoryItem(evt.timestamp, State.Active))))
       log.info(s"New account ${evt.accountNumber} has been created")
       evt
-    case evt: AccountDeletedEvt =>
-      updateInternalState(state.get(evt.accountId).map(account => account.copy(stateHistory = StateHistoryItem(evt.timestamp, State.Deleted) :: account.stateHistory)).get)
-      log.info(s"Account ${evt.accountId} has been deleted")
+    case evt: AccountDeactivatedEvt =>
+      updateInternalState(state.get(evt.accountId).map(account => account.copy(stateHistory = StateHistoryItem(evt.timestamp, State.Deactived) :: account.stateHistory)).get)
+      log.info(s"Account ${evt.accountId} has been deactivated")
       evt
     case evt: AccountReactivatedEvt =>
       updateInternalState(state.get(evt.accountId).map(account => account.copy(stateHistory = StateHistoryItem(evt.timestamp, State.Active) :: account.stateHistory)).get)
-      log.info(s"Account ${evt.accountId} has been deleted")
+      log.info(s"Account ${evt.accountId} has been reactivated")
       evt
   }
 
-  def createAccount(cmd: CreateAccountCmd): DomainValidation[AccountCreatedEvt] = Account.create(cmd.accountNumber, cmd.accountHolder)
+  def createAccount(cmd: CreateAccountCmd): DomainValidation[AccountCreatedEvt] = {
+    state.get(cmd.accountNumber.accountId) match {
+      case Some(_) => s"Account ${cmd.accountNumber.accountId} already exists!".failureNel
+      case None => Account.create(cmd.accountNumber, cmd.accountHolder)
+    }
+  }
 
-  def deleteAccount(cmd: DeleteAccountCmd): DomainValidation[AccountDeletedEvt] = generateEvent(cmd.accountId) {
-    account => Account.delete(account)
+  def deactivateAccount(cmd: DeactivateAccountCmd): DomainValidation[AccountDeactivatedEvt] = generateEvent(cmd.accountId) {
+    account => Account.deactivate(account)
   }
 
   def reactivateAccount(cmd: ReactivateAccountCmd): DomainValidation[AccountReactivatedEvt] = generateEvent(cmd.accountId) {
@@ -56,7 +61,7 @@ class AccountingSystem extends PersistentActor with ActorLogging with StreamEvtP
   def generateEvent[A <: AccountOperationEvt](accountId: String)(fn: Account => DomainValidation[A]): DomainValidation[A] =
     state.get(accountId) match {
       case Some(account) => fn(account)
-      case None => s"Account $accountId does not exist".failureNel
+      case None => s"Account $accountId does not exist!".failureNel
     }
 
   override def receiveCommand: Receive = {
@@ -64,8 +69,8 @@ class AccountingSystem extends PersistentActor with ActorLogging with StreamEvtP
       err => publishEvt(AccountCreationFailedEvt(err)),
       evt => persist(evt)(handleAndThenPublishEvt)
     )
-    case cmd: DeleteAccountCmd => deleteAccount(cmd).fold(
-      err => publishEvt(AccountDeletionFailedEvt(err)),
+    case cmd: DeactivateAccountCmd => deactivateAccount(cmd).fold(
+      err => publishEvt(AccountDeactivationFailedEvt(err)),
       evt => persist(evt)(handleAndThenPublishEvt)
     )
     case cmd: ReactivateAccountCmd => reactivateAccount(cmd).fold(
@@ -83,15 +88,17 @@ trait EvtPublisher {
 
   def publishEvt: PartialFunction[DomainEvt, Unit]
 
-  def handleAndThenPublishEvt = handleEvt andThen publishEvt
+  def handleAndThenPublishEvt: PartialFunction[DomainEvt, Unit] = handleEvt andThen publishEvt
 }
 
 trait StreamEvtPublisher extends EvtPublisher {
 
-  self: Actor =>
+  self: Actor with ActorLogging =>
 
-  val publishEvt: PartialFunction[DomainEvt, Unit] = {
-    case evt => context.system.eventStream.publish(evt)
+  override def publishEvt: PartialFunction[DomainEvt, Unit] = {
+    case evt =>
+      context.system.eventStream.publish(evt)
+      log.info(s"$evt is published!")
   }
 }
 

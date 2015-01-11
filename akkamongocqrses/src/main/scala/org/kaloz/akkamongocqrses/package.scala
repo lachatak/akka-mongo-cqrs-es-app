@@ -4,7 +4,7 @@ import java.text.SimpleDateFormat
 
 import org.apache.commons.lang3.StringUtils
 import org.joda.time.DateTime
-import org.kaloz.akkamongocqrses.AccountProtocol.{AccountCreatedEvt, AccountDeletedEvt, AccountReactivatedEvt}
+import org.kaloz.akkamongocqrses.AccountProtocol.{AccountCreatedEvt, AccountDeactivatedEvt, AccountReactivatedEvt}
 
 import scalaz.Scalaz._
 import scalaz._
@@ -22,6 +22,14 @@ package object akkamongocqrses {
     def checkString(value: String, err: ValidationKey): DomainValidation[String] =
       if (StringUtils.isEmpty(value)) err.failNel else value.success
 
+    def checkAccountId(value: String): DomainValidation[String] = {
+      """^\d{8}-\d{8}-\d{8}$""".r.findFirstIn(value) match {
+        case Some(accountId) => accountId.success
+        case None => s"""Not valid account number "$value"""".failureNel
+      }
+
+    }
+
     def checkDate(date: String): DomainValidation[DateTime] =
       try {
         new DateTime(new SimpleDateFormat("ddMMyyyyHHmmss").parse(date)).success
@@ -37,17 +45,17 @@ package object akkamongocqrses {
 
   object State extends Enumeration {
     type State = Value
-    val Active, Deleted = Value
+    val Active, Deactived = Value
 
     implicit class StateValue(state: Value) {
-      def delete = state match {
-        case Active => Deleted.success
-        case Deleted => "Account is already deleted".failureNel
+      def deactivate = state match {
+        case Active => Deactived.success
+        case Deactived => "Account is already deactivated".failureNel
       }
 
       def reactivate = state match {
         case Active => "Account is already active".failureNel
-        case Deleted => Active.success
+        case Deactived => Active.success
       }
     }
 
@@ -64,10 +72,8 @@ package object akkamongocqrses {
 
     import org.kaloz.akkamongocqrses.CommonValidations._
 
-    case object AccountIdRequired extends ValidationKey
-
     def validate(accountNumber: AccountNumber): DomainValidation[AccountNumber] =
-      checkString(accountNumber.accountId, AccountIdRequired) match {
+      checkAccountId(accountNumber.accountId) match {
         case Success(_) => accountNumber.success
         case Failure(errors) => errors.failure
       }
@@ -100,10 +106,10 @@ package object akkamongocqrses {
         case (accNum, accHolder) => AccountCreatedEvt(accNum, accHolder, new DateTime)
       }
 
-    def delete(account: Account): DomainValidation[AccountDeletedEvt] = {
+    def deactivate(account: Account): DomainValidation[AccountDeactivatedEvt] = {
       import org.kaloz.akkamongocqrses.State._
-      account.stateHistory.head.state.delete match {
-        case Success(_) => AccountDeletedEvt(account.accountNumber.accountId, new DateTime).success
+      account.stateHistory.head.state.deactivate match {
+        case Success(_) => AccountDeactivatedEvt(account.accountNumber.accountId, new DateTime).success
         case Failure(errors) => errors.failure
       }
     }

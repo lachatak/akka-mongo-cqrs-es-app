@@ -10,8 +10,8 @@ object AccountProtocol {
 
   case class CreateAccountCmd(accountNumber: AccountNumber, accountHolder: AccountHolder) extends AccountOperationCmd
 
-  case class DeleteAccountCmd(accountId: String) extends AccountOperationCmd
-  
+  case class DeactivateAccountCmd(accountId: String) extends AccountOperationCmd
+
   case class ReactivateAccountCmd(accountId: String) extends AccountOperationCmd
 
   case class AccountTransactionCmd(accountNumber: String, amount: BigDecimal, partnerAccount: String, partnerName: String) extends AccountOperationCmd
@@ -24,23 +24,18 @@ object AccountProtocol {
 
   case class AccountCreationFailedEvt(errors: NonEmptyList[String]) extends AccountOperationEvt with ErrorEvt
 
-  case class AccountDeletedEvt(accountId: String, timestamp: DateTime) extends AccountOperationEvt
+  case class AccountDeactivatedEvt(accountId: String, timestamp: DateTime) extends AccountOperationEvt
 
-  case class AccountDeletionFailedEvt(errors: NonEmptyList[String]) extends AccountOperationEvt with ErrorEvt
+  case class AccountDeactivationFailedEvt(errors: NonEmptyList[String]) extends AccountOperationEvt with ErrorEvt
 
   case class AccountReactivatedEvt(accountId: String, timestamp: DateTime) extends AccountOperationEvt
 
   case class AccountReactivationFailedEvt(errors: NonEmptyList[String]) extends AccountOperationEvt with ErrorEvt
-  
+
   case class AccountTransactionProcessedEvt(accountNumber: String, balance: BigDecimal, partnerAccount: String, partnerName: String, timestamp: DateTime) extends AccountOperationEvt
 
   sealed trait ErrorEvt {
     val errors: NonEmptyList[String]
   }
 
-}
-
-object test extends App {
-
-  println(Account.create(AccountNumber("12345678-12345678-12345678", Type.Current, Currency.GBP), AccountHolder("krs", "uk")))
 }

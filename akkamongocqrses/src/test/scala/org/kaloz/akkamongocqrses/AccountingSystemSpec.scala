@@ -12,8 +12,8 @@ import de.flapdoodle.embed.process.extract.UUIDTempNaming
 import de.flapdoodle.embed.process.io.directories.PlatformTempDir
 import de.flapdoodle.embed.process.io.{NullProcessor, Processors}
 import de.flapdoodle.embed.process.runtime.Network
-import org.kaloz.akkamongocqrses.AccountProtocol.{AccountCreationFailedEvt, AccountCreatedEvt, CreateAccountCmd}
-import org.scalatest.{BeforeAndAfterAll, BeforeAndAfterEach, MustMatchers, WordSpecLike}
+import org.kaloz.akkamongocqrses.AccountProtocol._
+import org.scalatest.{BeforeAndAfterAll, MustMatchers, WordSpecLike}
 
 import scala.concurrent.duration._
 
@@ -33,20 +33,16 @@ object AccountingSystemSpec {
       |casbah-snapshot-store.mongo-snapshot-url = "mongodb://localhost:$port/store.snapshots"
       |casbah-snapshot-store.mongo-snapshot-write-concern = "journaled"
       |casbah-snapshot-store.mongo-snapshot-write-concern-timeout = 10000
-      |benefits-view.mongo-url = "mongodb://localhost:$port/hr.benefits"
     """.stripMargin)
 
-  //  lazy val freePort = Network.getFreeServerPort
-  lazy val freePort = 27017
-
+  lazy val freePort = Network.getFreeServerPort
 }
 
 class AccountingSystemSpec extends TestKit(ActorSystem("test", AccountingSystemSpec.config(AccountingSystemSpec.freePort)))
 with ImplicitSender
 with WordSpecLike
 with MustMatchers
-with BeforeAndAfterAll
-with BeforeAndAfterEach {
+with BeforeAndAfterAll {
 
   import org.kaloz.akkamongocqrses.AccountingSystemSpec._
 
@@ -109,33 +105,96 @@ with BeforeAndAfterEach {
     mongodExe.stop()
   }
 
-  val validAccountId = "12345678-12345678-12345678"
-  val invalidAccountId = ""
+  val invalidAccountId = "xxx-xxx-xxx"
   val validAccountHolderName = "Krisztian Lachata"
   val validAddress = "UK"
 
   "The AccountingSystem" must {
-    "when issued a validated CreateAccountCmd command, generate a persisted AccountCreatedEvt event" in {
-      val probe = TestProbe()
-      system.eventStream.subscribe(probe.ref, classOf[AccountCreatedEvt])
-      val cmd = CreateAccountCmd(AccountNumber(validAccountId, Type.Current, Currency.GBP), AccountHolder(validAccountHolderName, validAddress))
-      accountingSystem ! cmd
-      val result = probe.expectMsgType[AccountCreatedEvt]
-
-      result.accountNumber mustEqual(AccountNumber(validAccountId, Type.Current, Currency.GBP))
-      result.accountHolder mustEqual(AccountHolder(validAccountHolderName, validAddress))
-    }
-    "when issued an invalidated CreateAccountCmd command with an invalid accountId, generate a AccountCreationFailedEvt event" in {
+    "when issued a CreateAccountCmd command with an invalid accountId, generate an AccountCreationFailedEvt event" in {
       val probe = TestProbe()
       system.eventStream.subscribe(probe.ref, classOf[AccountCreationFailedEvt])
-      val cmd = CreateAccountCmd(AccountNumber(invalidAccountId, Type.Current, Currency.GBP), AccountHolder(validAccountHolderName, validAddress))
+      accountingSystem ! CreateAccountCmd(AccountNumber(invalidAccountId, Type.Current, Currency.GBP), AccountHolder(validAccountHolderName, validAddress))
+      val result = probe.expectMsgType[AccountCreationFailedEvt]
+
+      result.errors must have size 1
+    }
+    "when issued a validated CreateAccountCmd command, generate a persisted AccountCreatedEvt event" in new scope {
+      val probe = TestProbe()
+      system.eventStream.subscribe(probe.ref, classOf[AccountCreatedEvt])
+      accountingSystem ! CreateAccountCmd(AccountNumber(validAccountId, Type.Current, Currency.GBP), AccountHolder(validAccountHolderName, validAddress))
+      val result = probe.expectMsgType[AccountCreatedEvt]
+
+      result.accountNumber mustEqual (AccountNumber(validAccountId, Type.Current, Currency.GBP))
+      result.accountHolder mustEqual (AccountHolder(validAccountHolderName, validAddress))
+    }
+    "when issued a CreateAccountCmd command where the account already exists, generate an AccountCreationFailedEvt event" in new scope {
+      val probe = TestProbe()
+      system.eventStream.subscribe(probe.ref, classOf[AccountCreationFailedEvt])
+      val cmd = CreateAccountCmd(AccountNumber(validAccountId, Type.Current, Currency.GBP), AccountHolder(validAccountHolderName, validAddress))
+      accountingSystem ! cmd
       accountingSystem ! cmd
       val result = probe.expectMsgType[AccountCreationFailedEvt]
 
-      println(result)
-//      result.accountNumber mustEqual(AccountNumber(validAccountId, Type.Current, Currency.GBP))
-//      result.accountHolder mustEqual(AccountHolder(validAccountHolderName, validAddress))
+      result.errors must have size 1
+    }
+    "when issued a DeactivateAccountCmd command where the account doesn't exist, generate an AccountDeactivationFailedEvt event" in new scope {
+      val probe = TestProbe()
+      system.eventStream.subscribe(probe.ref, classOf[AccountDeactivationFailedEvt])
+      accountingSystem ! DeactivateAccountCmd(validAccountId)
+      val result = probe.expectMsgType[AccountDeactivationFailedEvt]
+
+      result.errors must have size 1
+    }
+    "when issued a valid DeactivateAccountCmd command where the account exists, generate a persisted AccountDeactivatedEvt event" in new scope {
+      val probe = TestProbe()
+      system.eventStream.subscribe(probe.ref, classOf[AccountDeactivatedEvt])
+      accountingSystem ! CreateAccountCmd(AccountNumber(validAccountId, Type.Current, Currency.GBP), AccountHolder(validAccountHolderName, validAddress))
+      accountingSystem ! DeactivateAccountCmd(validAccountId)
+      probe.expectMsgType[AccountDeactivatedEvt]
+    }
+    "when issued a ReactivateAccountCmd command where the account doesn't exist, generate an AccountReactivationFailedEvt event" in new scope {
+      val probe = TestProbe()
+      system.eventStream.subscribe(probe.ref, classOf[AccountReactivationFailedEvt])
+      accountingSystem ! ReactivateAccountCmd(validAccountId)
+      val result = probe.expectMsgType[AccountReactivationFailedEvt]
+
+      result.errors must have size 1
+    }
+    "when issued a ReactivateAccountCmd command where the account is active, generate an AccountReactivationFailedEvt event" in new scope {
+      val probe = TestProbe()
+      system.eventStream.subscribe(probe.ref, classOf[AccountReactivationFailedEvt])
+      accountingSystem ! CreateAccountCmd(AccountNumber(validAccountId, Type.Current, Currency.GBP), AccountHolder(validAccountHolderName, validAddress))
+      accountingSystem ! ReactivateAccountCmd(validAccountId)
+      val result = probe.fishForMessage(3 second) {
+        case evt: AccountReactivationFailedEvt => true
+        case _ => false
+      }
+
+      result.asInstanceOf[AccountReactivationFailedEvt].errors must have size 1
+    }
+    "when issued a valid ReactivateAccountCmd command where the account is deactivated, generate an AccountReactivatedEvt event" in new scope {
+      val probe = TestProbe()
+      system.eventStream.subscribe(probe.ref, classOf[AccountReactivatedEvt])
+      accountingSystem ! CreateAccountCmd(AccountNumber(validAccountId, Type.Current, Currency.GBP), AccountHolder(validAccountHolderName, validAddress))
+      accountingSystem ! DeactivateAccountCmd(validAccountId)
+      accountingSystem ! ReactivateAccountCmd(validAccountId)
+      probe.fishForMessage(3 second) {
+        case evt: AccountReactivatedEvt => true
+        case _ => false
+      }
     }
   }
+
+  private trait scope {
+
+    val validAccountId: String = {
+      val r = new scala.util.Random
+      "xxxxxxxx-xxxxxxxx-xxxxxxxx".map {
+        case x: Char if x == 'x' => r.nextInt(9).toString
+        case x => x.toString
+      }.mkString("")
+    }
+  }
+
 }
 
